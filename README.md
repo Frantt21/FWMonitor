@@ -91,6 +91,6 @@ ARP pasiva del sistema (los hosts con los que tu máquina ya ha hablado).
 - [x] Backend Linux (nl80211 vía `neli`): escaneo real de BSSIDs + sondeo ARP (AF_PACKET)
 - [x] Resolución de fabricante por OUI (tabla integrada + IEEE/Wireshark externa)
 - [x] Export a CSV con timestamp (`--csv`, `--csv-append`)
+- [x] Historial de clientes: nuevo/ausente entre snapshots en la TUI (TTL 5 min)
 - [ ] Resolución de nombres (mDNS/NBNS/SSDP)
-- [ ] Historial de clientes (nuevo/ausente entre snapshots)
 - [ ] Monitor mode opcional en Linux con channel hopping

@@ -8,10 +8,11 @@ use ratatui::{
     Frame,
 };
 
+use crate::history::{Presence, TrackedHost};
 use crate::model::Snapshot;
 
 /// Dibuja un frame completo con dos paneles: WiFi arriba, LAN abajo.
-pub fn draw(f: &mut Frame, snap: &Snapshot, interval: u64) {
+pub fn draw(f: &mut Frame, snap: &Snapshot, tracked: &[TrackedHost], interval: u64) {
     let [top, bottom] = Layout::vertical([
         Constraint::Percentage(60),
         Constraint::Percentage(40),
@@ -19,8 +20,8 @@ pub fn draw(f: &mut Frame, snap: &Snapshot, interval: u64) {
     .areas(f.area());
 
     draw_wifi_panel(f, snap, top);
-    draw_lan_panel(f, snap, bottom);
-    draw_footer(f, snap, interval);
+    draw_lan_panel(f, snap, tracked, bottom);
+    draw_footer(f, snap, tracked, interval);
 }
 
 fn draw_wifi_panel(f: &mut Frame, snap: &Snapshot, area: ratatui::layout::Rect) {
@@ -70,44 +71,58 @@ fn draw_wifi_panel(f: &mut Frame, snap: &Snapshot, area: ratatui::layout::Rect) 
     f.render_widget(table, area);
 }
 
-fn draw_lan_panel(f: &mut Frame, snap: &Snapshot, area: ratatui::layout::Rect) {
-    let header = Row::new(["IP", "MAC", "Tipo", "Fabricante"])
+fn draw_lan_panel(f: &mut Frame, snap: &Snapshot, tracked: &[TrackedHost], area: ratatui::layout::Rect) {
+    let header = Row::new(["IP", "MAC", "Tipo", "Fabricante", "Estado"])
         .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
 
-    let rows: Vec<Row> = snap
-        .hosts
+    let rows: Vec<Row> = tracked
         .iter()
-        .map(|h| {
+        .map(|t| {
+            let (state_txt, state_style) = match t.state {
+                Presence::New => (
+                    "nuevo",
+                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                ),
+                Presence::Gone => ("ausente", Style::default().fg(Color::DarkGray)),
+                Presence::Normal => ("", Style::default()),
+            };
             Row::new([
-                Cell::from(h.ip.clone()),
-                Cell::from(h.mac.clone()),
-                Cell::from(h.kind.clone()),
-                Cell::from(h.vendor.clone()),
+                Cell::from(t.host.ip.clone()),
+                Cell::from(t.host.mac.clone()),
+                Cell::from(t.host.kind.clone()),
+                Cell::from(t.host.vendor.clone()),
+                Cell::from(state_txt).style(state_style),
             ])
         })
         .collect();
 
+    let activos = tracked.iter().filter(|t| t.state != Presence::Gone).count();
+    let ausentes = tracked.len() - activos;
     let net_info = snap.net.as_deref().unwrap_or("");
     let table = Table::new(
         rows,
         [
             Constraint::Percentage(15),
-            Constraint::Percentage(20),
+            Constraint::Percentage(19),
             Constraint::Length(8),
-            Constraint::Percentage(57),
+            Constraint::Percentage(45),
+            Constraint::Length(9),
         ],
     )
     .header(header)
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .title(format!(" LAN: {} hosts {net_info} ", snap.hosts.len())),
+            .title(format!(
+                " LAN: {} activos, {} ausentes {net_info} ",
+                activos, ausentes
+            )),
     );
 
     f.render_widget(table, area);
 }
 
-fn draw_footer(f: &mut Frame, snap: &Snapshot, interval: u64) {
+fn draw_footer(f: &mut Frame, snap: &Snapshot, tracked: &[TrackedHost], interval: u64) {
     let area = f.area();
     let mut spans = vec![
         Span::styled(
@@ -119,6 +134,23 @@ fn draw_footer(f: &mut Frame, snap: &Snapshot, interval: u64) {
         Span::raw("  "),
         Span::styled("[q] salir", Style::default().fg(Color::Yellow)),
     ];
+
+    let nuevos = tracked.iter().filter(|t| t.state == Presence::New).count();
+    let ausentes = tracked.iter().filter(|t| t.state == Presence::Gone).count();
+    if nuevos > 0 {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            format!("{nuevos} nuevo(s)"),
+            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+        ));
+    }
+    if ausentes > 0 {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            format!("{ausentes} ausente(s)"),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
 
     if !snap.errors.is_empty() {
         spans.push(Span::raw("  "));

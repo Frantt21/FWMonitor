@@ -2,6 +2,7 @@
 //! Windows: escaneo BSSID (Native WiFi API) + descubrimiento ARP.
 
 mod csv;
+mod history;
 mod lan;
 mod model;
 mod oui;
@@ -141,9 +142,11 @@ fn tui_loop(
     interval: u64,
 ) -> anyhow::Result<()> {
     let mut snap = model::snapshot(oui);
+    let mut history = history::ClientHistory::default();
+    let mut tracked = history.update(&snap.hosts);
 
     loop {
-        terminal.draw(|f| ui::draw(f, &snap, interval))?;
+        terminal.draw(|f| ui::draw(f, &snap, &tracked, interval))?;
 
         // Espera eventos con timeout = intervalo de refresco
         if event::poll(Duration::from_secs(interval))? {
@@ -152,7 +155,10 @@ fn tui_loop(
                 if key.kind == ratatui::crossterm::event::KeyEventKind::Press {
                     match key.code {
                         KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
-                        KeyCode::Char('r') => snap = model::snapshot(oui),
+                        KeyCode::Char('r') => {
+                            snap = model::snapshot(oui);
+                            tracked = history.update(&snap.hosts);
+                        }
                         _ => {}
                     }
                 }
@@ -160,6 +166,7 @@ fn tui_loop(
         } else {
             // Timeout: refrescar datos
             snap = model::snapshot(oui);
+            tracked = history.update(&snap.hosts);
         }
     }
 }
