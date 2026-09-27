@@ -1,0 +1,24 @@
+[package]
+name = "fwmonitor"
+version = "0.1.0"
+edition = "2021"
+description = "FWMonitor - monitor de red WiFi en terminal (escaneo BSSID + inventario LAN)"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+ratatui = "0.29"
+crossterm = "0.28"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_WiFi",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
+] }
+
+[profile.release]
+lto = true
+strip = true
