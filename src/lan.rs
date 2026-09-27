@@ -80,6 +80,7 @@ pub fn probe_sweep(net: &LocalNet) -> Vec<LanHost> {
                         ip: ip.to_string(),
                         mac,
                         kind: "ARP".to_string(),
+                        vendor: String::new(), // se resuelve en model::snapshot()
                     });
                 }
             }
@@ -261,6 +262,7 @@ pub fn scan_hosts() -> anyhow::Result<Vec<LanHost>> {
                 ip: Ipv4Addr::from(u32::from_be(row.dwAddr)).to_string(),
                 mac: mac_to_string(mac_bytes),
                 kind: ipnet_kind_to_string(kind).to_string(),
+                vendor: String::new(), // se resuelve en model::snapshot()
             });
         }
     }

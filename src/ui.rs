@@ -24,7 +24,7 @@ pub fn draw(f: &mut Frame, snap: &Snapshot, interval: u64) {
 }
 
 fn draw_wifi_panel(f: &mut Frame, snap: &Snapshot, area: ratatui::layout::Rect) {
-    let header = Row::new(["SSID", "BSSID", "Señal", "Canal", "PHY"])
+    let header = Row::new(["SSID", "BSSID", "Señal", "Canal", "PHY", "Fabricante"])
         .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
 
     let rows: Vec<Row> = snap
@@ -43,6 +43,7 @@ fn draw_wifi_panel(f: &mut Frame, snap: &Snapshot, area: ratatui::layout::Rect) 
                 Cell::from(format!("{bars} {signal}")),
                 Cell::from(ap.channel.to_string()),
                 Cell::from(ap.phy.clone()),
+                Cell::from(ap.vendor.clone()),
             ])
         })
         .collect();
@@ -50,18 +51,19 @@ fn draw_wifi_panel(f: &mut Frame, snap: &Snapshot, area: ratatui::layout::Rect) 
     let table = Table::new(
         rows,
         [
+            Constraint::Percentage(20),
+            Constraint::Percentage(19),
+            Constraint::Percentage(15),
+            Constraint::Length(6),
+            Constraint::Percentage(12),
             Constraint::Percentage(28),
-            Constraint::Percentage(24),
-            Constraint::Percentage(20),
-            Constraint::Length(7),
-            Constraint::Percentage(20),
         ],
     )
     .header(header)
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .title(format!(" WiFi: {} BSSIDs (interface: {}) ", snap.aps.len(), snap.iface)),
+            .title(format!(" WiFi: {} BSSIDs (interfaz: {}) ", snap.aps.len(), snap.iface)),
     )
     .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
@@ -69,7 +71,7 @@ fn draw_wifi_panel(f: &mut Frame, snap: &Snapshot, area: ratatui::layout::Rect) 
 }
 
 fn draw_lan_panel(f: &mut Frame, snap: &Snapshot, area: ratatui::layout::Rect) {
-    let header = Row::new(["IP", "MAC", "Tipo"])
+    let header = Row::new(["IP", "MAC", "Tipo", "Fabricante"])
         .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
 
     let rows: Vec<Row> = snap
@@ -80,6 +82,7 @@ fn draw_lan_panel(f: &mut Frame, snap: &Snapshot, area: ratatui::layout::Rect) {
                 Cell::from(h.ip.clone()),
                 Cell::from(h.mac.clone()),
                 Cell::from(h.kind.clone()),
+                Cell::from(h.vendor.clone()),
             ])
         })
         .collect();
@@ -88,9 +91,10 @@ fn draw_lan_panel(f: &mut Frame, snap: &Snapshot, area: ratatui::layout::Rect) {
     let table = Table::new(
         rows,
         [
-            Constraint::Percentage(30),
-            Constraint::Percentage(45),
-            Constraint::Percentage(25),
+            Constraint::Percentage(15),
+            Constraint::Percentage(20),
+            Constraint::Length(8),
+            Constraint::Percentage(57),
         ],
     )
     .header(header)

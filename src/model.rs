@@ -1,4 +1,6 @@
-use crate::{lan, wifi};
+//! Modelos de datos y captura del snapshot combinando WiFi + LAN.
+
+use crate::{lan, oui::OuiDb, wifi};
 
 /// Un punto de acceso (BSSID) visto por la tarjeta.
 #[derive(Clone, Debug)]
@@ -11,15 +13,19 @@ pub struct WifiAp {
     pub phy: String,
     /// Canal (0 = desconocido)
     pub channel: u8,
+    /// Fabricante según OUI del BSSID
+    pub vendor: String,
 }
 
-/// Un host conocido en la red local (tabla ARP del sistema).
+/// Un host conocido en la red local.
 #[derive(Clone, Debug)]
 pub struct LanHost {
     pub ip: String,
     pub mac: String,
-    /// Dynamic / Static / Other
+    /// GW / Local / Dynamic / Static / ARP
     pub kind: String,
+    /// Fabricante según OUI de la MAC
+    pub vendor: String,
 }
 
 /// Fotografía del estado de la red en un instante dado.
@@ -33,7 +39,7 @@ pub struct Snapshot {
     pub errors: Vec<String>,
 }
 
-pub fn snapshot() -> Snapshot {
+pub fn snapshot(oui: &OuiDb) -> Snapshot {
     let mut snap = Snapshot::default();
 
     match wifi::scan_aps() {
@@ -52,7 +58,9 @@ pub fn snapshot() -> Snapshot {
                 net.iface,
                 net.ip,
                 net.prefix_len,
-                net.gateway.map(|g| g.to_string()).unwrap_or_else(|| "—".into())
+                net.gateway
+                    .map(|g| g.to_string())
+                    .unwrap_or_else(|| "—".into())
             ));
             match lan::discover(&net) {
                 Ok(hosts) => snap.hosts = hosts,
@@ -60,6 +68,14 @@ pub fn snapshot() -> Snapshot {
             }
         }
         Err(e) => snap.errors.push(format!("Red local: {e}")),
+    }
+
+    // Resolver fabricantes por OUI
+    for ap in &mut snap.aps {
+        ap.vendor = oui.resolve(&ap.bssid);
+    }
+    for h in &mut snap.hosts {
+        h.vendor = oui.resolve(&h.mac);
     }
 
     snap.aps.sort_by_key(|ap| std::cmp::Reverse(ap.rssi));

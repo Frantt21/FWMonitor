@@ -144,6 +144,7 @@ unsafe fn collect_aps(session: &WlanSession) -> anyhow::Result<Vec<WifiAp>> {
                 rssi: entry.lRssi,
                 phy: dot11_phy_to_string(entry.dot11BssPhyType.0),
                 channel: freq_to_channel(entry.ulChCenterFrequency),
+                vendor: String::new(), // se resuelve en model::snapshot()
             });
         }
         WlanFreeMemory(bss_list_ptr as *const _);

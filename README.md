@@ -7,16 +7,16 @@ alrededor y descubre los dispositivos conectados a tu red local.
 Interfaz: Killer(R) Wi-Fi 6 AX1650x 160MHz Wireless Network Adapter (200NGW)
 Red local: Wi-Fi 192.168.100.95 /24 GW 192.168.100.1
 
-=== WiFi (2 BSSIDs) ===
-SSID                  BSSID               RSSI    CH  PHY
-MiRed                 a0:08:6f:9e:8f:68  -41 dBm    7  HT (11n)
-RedVecina             a0:08:6f:de:14:5d  -84 dBm    1  HT (11n)
+=== WiFi (3 BSSIDs) ===
+SSID                  BSSID               RSSI    CH  PHY           Fabricante
+MiRed                 a0:08:6f:9e:8f:68  -41 dBm    7  HT (11n)      AVM (FRITZ!Box)
+RedVecina             a0:08:6f:de:14:5d  -84 dBm    1  HT (11n)      AVM (FRITZ!Box)
 
 === LAN (3 hosts) ===
-IP               MAC                 Tipo
-192.168.100.1    a0:08:6f:9e:8f:62   GW
+IP               MAC                 Tipo     Fabricante
+192.168.100.1    a0:08:6f:9e:8f:62   GW       AVM (FRITZ!Box)
 192.168.100.95   8c:47:be:1d:b7:27   Local
-192.168.100.147  ee:d4:7e:28:5d:90   ARP
+192.168.100.147  fa:e2:d8:5d:96:24   ARP      MAC aleatoria (privada)
 ```
 
 ## Cómo funciona
@@ -26,14 +26,28 @@ IP               MAC                 Tipo
 - **LAN**: hace un barrido ARP del /24 (`SendARP`, paralelo con un hilo por IP)
   y lo fusiona con la tabla ARP del sistema. ARP descubre hosts aunque tengan
   firewall que bloquee ping.
+- **Fabricante**: resuelve el OUI (primeros 3 bytes de la MAC) contra una tabla
+  integrada (~200 fabricantes comunes). Las MAC localmente administradas se
+  marcan como "MAC aleatoria (privada)" — típico de móviles con privacidad MAC.
 
 ## Uso
 
 ```powershell
-fwmonitor               # TUI interactiva (r: refrescar, q: salir)
-fwmonitor --once        # una captura en texto plano
-fwmonitor -i 10         # refresco cada 10 s
+fwmonitor                          # TUI interactiva (r: refrescar, q: salir)
+fwmonitor --once                   # una captura en texto plano
+fwmonitor -i 10                    # refresco cada 10 s
+
+fwmonitor --csv captura.csv        # exporta una captura a CSV (sobreescribe)
+fwmonitor --csv-append hist.csv    # añade al CSV (histórico con timestamps)
+fwmonitor --once --csv h.csv       # texto + CSV a la vez
+
+fwmonitor --oui-db oui.csv         # base OUI externa (formato IEEE oui.csv
+                                   # o manuf de Wireshark), fusionada con la integrada
 ```
+
+El CSV tiene una fila por dispositivo con columna `ts` (timestamp ISO UTC),
+`source` (wifi|lan) y todos los campos. Con `--csv-append` desde cron/tarea
+programada construyes un histórico de quién aparece en tu red y cuándo.
 
 ## Compilar
 
@@ -57,7 +71,9 @@ cargo build --release
 
 ## Roadmap
 
-- [ ] Backend Linux (nl80211 vía `rtnetlink`/`iwlib`): escaneo + monitor mode real
-- [ ] Resolución de nombres (mDNS/NBNS/SSDP) y fabricante por OUI
-- [ ] Export a CSV/JSON, historial de clientes (nuevo/ausente)
+- [ ] Backend Linux (nl80211 vía `rtnetlink`): escaneo + monitor mode real
+- [x] Resolución de fabricante por OUI (tabla integrada + IEEE/Wireshark externa)
+- [x] Export a CSV con timestamp (`--csv`, `--csv-append`)
+- [ ] Resolución de nombres (mDNS/NBNS/SSDP)
+- [ ] Historial de clientes (nuevo/ausente entre snapshots)
 - [ ] Monitor mode opcional en Linux con channel hopping
