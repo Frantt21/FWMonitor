@@ -51,12 +51,29 @@ programada construyes un histórico de quién aparece en tu red y cuándo.
 
 ## Compilar
 
-Requiere Rust con toolchain `x86_64-pc-windows-msvc` (VS Build Tools) en
-Windows, y `libpcap`/headers de sistema en Linux.
+**Windows**: requiere Rust con toolchain `x86_64-pc-windows-msvc` (VS Build
+Tools). No necesita dependencias externas (usa `windows` crate).
+
+**Linux (Arch)**: toolchain estable estándar. No necesita libpcap ni iw: el
+escaneo nl80211 es Rust puro vía `neli`/`neli-wifi`.
 
 ```sh
 cargo build --release
 ```
+
+## Linux (Arch): permisos
+
+- **Escaneo WiFi (nl80211)**: sin permisos especiales. Funciona junto a
+  wpa_supplicant/NetworkManager (el kernel coordina los escaneos).
+- **Sondeo ARP**: requiere `CAP_NET_RAW` (sockets `AF_PACKET`). Dos opciones:
+
+```sh
+sudo ./fwmonitor --once                 # simple: ejecutar como root
+sudo setcap cap_net_raw=eip ./fwmonitor  # o dar la capability una vez
+```
+
+Si lo ejecutas sin `CAP_NET_RAW`, el sondeo ARP se omite y solo verás la tabla
+ARP pasiva del sistema (los hosts con los que tu máquina ya ha hablado).
 
 ## Limitaciones (por diseño, v1)
 
@@ -71,7 +88,7 @@ cargo build --release
 
 ## Roadmap
 
-- [ ] Backend Linux (nl80211 vía `rtnetlink`): escaneo + monitor mode real
+- [x] Backend Linux (nl80211 vía `neli`): escaneo real de BSSIDs + sondeo ARP (AF_PACKET)
 - [x] Resolución de fabricante por OUI (tabla integrada + IEEE/Wireshark externa)
 - [x] Export a CSV con timestamp (`--csv`, `--csv-append`)
 - [ ] Resolución de nombres (mDNS/NBNS/SSDP)
