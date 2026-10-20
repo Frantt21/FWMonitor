@@ -18,6 +18,15 @@ use neli_wifi::{Nl80211Attr, Nl80211Cmd, NL_80211_GENL_VERSION};
 
 use crate::model::WifiAp;
 
+/// Convierte el `AttrIfname` de nl80211 a un String utilizable.
+///
+/// El kernel entrega el nombre terminado en NUL (p. ej. `b"wlan0\0"`), así que
+/// hay que recortar los bytes nulos finales o las comparaciones por nombre fallan.
+pub(crate) fn ifname_to_string(name: &[u8]) -> String {
+    let end = name.iter().position(|&b| b == 0).unwrap_or(name.len());
+    String::from_utf8_lossy(&name[..end]).to_string()
+}
+
 fn mac_to_string(mac: &[u8]) -> String {
     mac.iter()
         .map(|b| format!("{b:02x}"))
@@ -28,7 +37,8 @@ fn mac_to_string(mac: &[u8]) -> String {
 /// Extrae el SSID (IE id 0) y la "Supported Rates"/HT info aproximada de los IEs.
 /// El PHY real lo deducimos de las capacidades anunciadas: es lo mismo que hace
 /// `iw` al mostrar "capability". Nos basta con distinguir b/g/n/ac/ax.
-fn parse_ies(ies: &[u8]) -> (Option<String>, Option<&'static str>) {
+/// (Pública dentro del crate: también la usa `monitor` para parsear beacons.)
+pub(crate) fn parse_ies(ies: &[u8]) -> (Option<String>, Option<&'static str>) {
     let mut ssid = None;
     let mut phy = None;
     let mut i = 0usize;
@@ -55,7 +65,8 @@ fn parse_ies(ies: &[u8]) -> (Option<String>, Option<&'static str>) {
 }
 
 /// Frecuencia en MHz -> número de canal (2.4 y 5 GHz).
-fn freq_to_channel(mhz: u32) -> u8 {
+/// (Pública dentro del crate: también la usa `monitor`.)
+pub(crate) fn freq_to_channel(mhz: u32) -> u8 {
     match mhz {
         2412..=2472 => ((mhz - 2412) / 5 + 1) as u8,
         2484 => 14,
@@ -120,7 +131,7 @@ pub fn scan_aps() -> anyhow::Result<(String, Vec<WifiAp>)> {
     let iface_name = iface
         .name
         .as_ref()
-        .map(|n| String::from_utf8_lossy(n).to_string())
+        .map(|n| ifname_to_string(n))
         .unwrap_or_else(|| "wlan".to_string());
     let ifindex = iface
         .index
