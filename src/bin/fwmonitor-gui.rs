@@ -15,6 +15,7 @@ use fwmonitor::connect;
 use fwmonitor::history::{ClientHistory, Presence, TrackedHost};
 use fwmonitor::model::{self, Snapshot};
 use fwmonitor::oui::OuiDb;
+use fwmonitor::router;
 
 const GREEN: Color32 = Color32::from_rgb(110, 200, 120);
 const YELLOW: Color32 = Color32::from_rgb(220, 200, 100);
@@ -86,6 +87,25 @@ type Series = VecDeque<(Instant, i32)>;
 enum OpResult {
     Connected(Result<String, String>),
     Revealed { ssid: String, result: Result<String, String> },
+    Router(Result<RouterView, String>),
+}
+
+/// Datos del router listos para pintar.
+struct RouterView {
+    model: String,
+    software: String,
+    wan: router::WanStatus,
+    hosts: Vec<router::RouterHost>,
+}
+
+/// Ventana de consulta del router (TR-064).
+struct RouterWindow {
+    url: String,
+    user: String,
+    password: String,
+    busy: bool,
+    error: Option<String>,
+    view: Option<RouterView>,
 }
 
 /// Diálogo de conexión a una red.
@@ -124,6 +144,7 @@ struct App {
     notice: Option<String>,
     ops_tx: Sender<OpResult>,
     ops_rx: Receiver<OpResult>,
+    router_win: Option<RouterWindow>,
 }
 
 impl App {
@@ -160,6 +181,7 @@ impl App {
             notice: None,
             ops_tx,
             ops_rx,
+            router_win: None,
         }
     }
 
@@ -284,6 +306,147 @@ impl App {
                 self.revealed = Some(rev);
             }
         }
+
+        if let Some(mut w) = self.router_win.take() {
+            let (mut submit, mut close) = (false, false);
+
+            egui::Window::new("Router (TR-064)")
+                .collapsible(false)
+                .default_width(560.0)
+                .show(ctx, |ui| {
+                    ui.label(
+                        RichText::new(
+                            "Credenciales solo en memoria; no se guardan en disco ni en el CSV.",
+                        )
+                        .color(MUTED)
+                        .small(),
+                    );
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("URL").color(MUTED));
+                        ui.add(egui::TextEdit::singleline(&mut w.url).desired_width(260.0));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Usuario").color(MUTED));
+                        ui.add(egui::TextEdit::singleline(&mut w.user).desired_width(130.0));
+                        ui.label(RichText::new("Contraseña").color(MUTED));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut w.password)
+                                .password(true)
+                                .desired_width(130.0),
+                        );
+                    });
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        let can = !w.busy && !w.url.trim().is_empty();
+                        if ui
+                            .add_enabled(can, egui::Button::new("Consultar"))
+                            .clicked()
+                        {
+                            submit = true;
+                        }
+                        if w.busy {
+                            ui.spinner();
+                        }
+                        if ui.button("Cerrar").clicked() {
+                            close = true;
+                        }
+                    });
+
+                    if let Some(err) = &w.error {
+                        ui.add_space(4.0);
+                        ui.label(RichText::new(err).color(RED));
+                        ui.label(
+                            RichText::new(
+                                "Si el puerto 49000 rechaza la conexión, activa TR-064 en el router.",
+                            )
+                            .color(MUTED)
+                            .small(),
+                        );
+                    }
+
+                    if let Some(v) = &w.view {
+                        ui.separator();
+                        ui.label(
+                            RichText::new(format!("{} · FRITZ!OS {}", v.model, v.software))
+                                .strong(),
+                        );
+                        ui.label(
+                            RichText::new(format!(
+                                "WAN: {} · {} · {} · {:.0}/{:.0} Mbps",
+                                if v.wan.external_ip.is_empty() {
+                                    "sin IP"
+                                } else {
+                                    &v.wan.external_ip
+                                },
+                                v.wan.access_type,
+                                v.wan.physical_link,
+                                v.wan.down_mbps,
+                                v.wan.up_mbps
+                            ))
+                            .color(MUTED),
+                        );
+                        ui.separator();
+                        ui.label(RichText::new(format!("Hosts ({})", v.hosts.len())).strong());
+
+                        egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                            egui::Grid::new("router_hosts")
+                                .num_columns(4)
+                                .striped(true)
+                                .spacing([12.0, 4.0])
+                                .show(ui, |ui| {
+                                    for h in ["Nombre", "IP", "MAC", "Estado"] {
+                                        ui.strong(h);
+                                    }
+                                    ui.end_row();
+
+                                    for h in &v.hosts {
+                                        ui.label(if h.name.is_empty() { "—" } else { &h.name });
+                                        ui.label(RichText::new(&h.ip).monospace());
+                                        ui.label(RichText::new(&h.mac).monospace());
+                                        ui.label(
+                                            RichText::new(if h.active {"activo"} else {"inactivo"})
+                                                .color(if h.active { GREEN } else { MUTED }),
+                                        );
+                                        ui.end_row();
+                                    }
+                                });
+                        });
+                    }
+                });
+
+            if submit {
+                let (url, user, password) = (w.url.clone(), w.user.clone(), w.password.clone());
+                w.busy = true;
+                w.error = None;
+                self.start_router(url, user, password);
+            }
+            if !close {
+                self.router_win = Some(w);
+            }
+        }
+    }
+
+    /// Consulta el router en segundo plano.
+    fn start_router(&mut self, url: String, user: String, password: String) {
+        let (ctx, tx) = (self.ctx.clone(), self.ops_tx.clone());
+        thread::spawn(move || {
+            let res = (|| {
+                let fb = router::FritzBox::new(&url, &user, &password)?;
+                let info = fb.info()?;
+                let wan = fb.wan()?;
+                let hosts = fb.hosts()?;
+                Ok(RouterView {
+                    model: info.model,
+                    software: info.software,
+                    wan,
+                    hosts,
+                })
+            })()
+            .map_err(|e: anyhow::Error| e.to_string());
+            let _ = tx.send(OpResult::Router(res));
+            ctx.request_repaint();
+        });
     }
 
     /// Lanza la lectura de la contraseña guardada de la red activa.
@@ -319,6 +482,16 @@ impl App {
                 {
                     let _ = self.cmd_tx.send(());
                     self.scanning = true;
+                }
+                if ui.button("Router…").clicked() {
+                    self.router_win = Some(RouterWindow {
+                        url: "http://192.168.178.1:49000".to_string(),
+                        user: String::new(),
+                        password: String::new(),
+                        busy: false,
+                        error: None,
+                        view: None,
+                    });
                 }
                 ui.label(RichText::new(format!("cada {} s", self.interval)).color(MUTED));
                 if self.scanning {
@@ -776,6 +949,18 @@ impl eframe::App for App {
                 }
                 OpResult::Revealed { ssid, result } => {
                     self.revealed = Some(Revealed { ssid, result });
+                }
+                OpResult::Router(result) => {
+                    if let Some(w) = &mut self.router_win {
+                        w.busy = false;
+                        match result {
+                            Ok(view) => {
+                                w.view = Some(view);
+                                w.error = None;
+                            }
+                            Err(e) => w.error = Some(e),
+                        }
+                    }
                 }
             }
         }

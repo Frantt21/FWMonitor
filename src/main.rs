@@ -2,7 +2,7 @@
 //! Windows: escaneo BSSID (Native WiFi API) + descubrimiento ARP.
 //! Linux: nl80211 + AF_PACKET, con modo monitor 802.11 opcional (--monitor).
 
-use fwmonitor::{csv, history, model, ui};
+use fwmonitor::{csv, history, model, router, ui};
 #[cfg(target_os = "linux")]
 use fwmonitor::monitor;
 
@@ -53,6 +53,24 @@ struct Args {
     /// capturan los canales sin DFS mientras duren los beacons.
     #[arg(long, value_name = "SPEC", default_value = "1-13")]
     monitor_channels: String,
+
+    /// Consultar el router por TR-064 (FRITZ!Box): estado WAN e inventario
+    #[arg(long, default_value_t = false)]
+    router: bool,
+    /// Endpoint TR-064 del router
+    #[arg(long, value_name = "URL", default_value = "http://192.168.178.1:49000")]
+    router_url: String,
+    /// Usuario del router (mejor vía FWMONITOR_ROUTER_USER)
+    #[arg(long, value_name = "USER", env = "FWMONITOR_ROUTER_USER")]
+    router_user: Option<String>,
+    /// Contraseña del router (mejor vía FWMONITOR_ROUTER_PASS: argv es visible)
+    #[arg(
+        long,
+        value_name = "PASS",
+        env = "FWMONITOR_ROUTER_PASS",
+        hide_env_values = true
+    )]
+    router_pass: Option<String>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -66,6 +84,11 @@ fn main() -> anyhow::Result<()> {
     // --- Modo monitor (solo Linux): captura pasiva 802.11 ---
     if args.monitor {
         monitor_mode(&args, &oui)?;
+        return Ok(());
+    }
+
+    if args.router {
+        router_mode(&args)?;
         return Ok(());
     }
 
@@ -215,6 +238,63 @@ fn monitor_mode(args: &Args, oui: &OuiDb) -> anyhow::Result<()> {
 #[cfg(not(target_os = "linux"))]
 fn monitor_mode(_args: &Args, _oui: &OuiDb) -> anyhow::Result<()> {
     anyhow::bail!("--monitor sólo está disponible en Linux")
+}
+
+/// Consulta el router (TR-064) e imprime estado WAN e inventario de hosts.
+fn router_mode(args: &Args) -> anyhow::Result<()> {
+    let user = args.router_user.clone().unwrap_or_default();
+    let pass = args.router_pass.clone().unwrap_or_default();
+    let fb = router::FritzBox::new(&args.router_url, &user, &pass)?;
+
+    let info = fb.info()?;
+    if !info.model.is_empty() {
+        println!(
+            "{} · FRITZ!OS {} · up {}",
+            info.model,
+            info.software,
+            hhmmss_uptime(info.uptime_secs)
+        );
+    }
+
+    let wan = fb.wan()?;
+    println!(
+        "WAN: {} · {} · {} · {:.0}/{:.0} Mbps (down/up)",
+        if wan.external_ip.is_empty() {
+            "sin IP"
+        } else {
+            &wan.external_ip
+        },
+        wan.access_type,
+        wan.physical_link,
+        wan.down_mbps,
+        wan.up_mbps
+    );
+
+    let hosts = fb.hosts()?;
+    println!("\n=== Hosts en el router ({} ) ===", hosts.len());
+    println!("{:<28} {:<16} {:<18} {:<9} {}", "Nombre", "IP", "MAC", "Tipo", "Estado");
+    for h in &hosts {
+        println!(
+            "{:<28} {:<16} {:<18} {:<9} {}",
+            truncate(if h.name.is_empty() { "—" } else { &h.name }, 28),
+            h.ip,
+            h.mac,
+            if h.iface.is_empty() { "—" } else { &h.iface },
+            if h.active { "activo" } else { "inactivo" }
+        );
+    }
+    Ok(())
+}
+
+fn hhmmss_uptime(secs: u64) -> String {
+    let (d, h, m) = (secs / 86400, (secs % 86400) / 3600, (secs % 3600) / 60);
+    if d > 0 {
+        format!("{d}d {h:02}h {m:02}m")
+    } else if h > 0 {
+        format!("{h}h {m:02}m")
+    } else {
+        format!("{m}m")
+    }
 }
 
 fn print_once(snap: &model::Snapshot) {

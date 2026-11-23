@@ -6,11 +6,12 @@ description = "FWMonitor - monitor de red WiFi en terminal (escaneo BSSID + inve
 
 [dependencies]
 anyhow = "1"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 ratatui = "0.29"
 crossterm = "0.28"
 eframe = "0.37"
 egui_extras = "0.37"
+md-5 = "0.11"
 
 [[bin]]
 name = "fwmonitor"

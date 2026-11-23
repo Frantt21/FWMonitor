@@ -59,6 +59,23 @@ sudo fwmonitor --monitor --monitor-channels 1-13,36,44,149   # soporta listas y 
 sudo fwmonitor --monitor --monitor-iface wlan0 --csv mon.csv
 ```
 
+### Router (FRITZ!Box TR-064)
+
+```sh
+# Credenciales por entorno: argv es visible en `ps`
+FWMONITOR_ROUTER_USER=usuario FWMONITOR_ROUTER_PASS=clave \
+  fwmonitor --router --router-url http://192.168.178.1:49000
+```
+
+Muestra modelo y FRITZ!OS, estado WAN (IP pública, tipo de acceso, enlace y
+Mbps) y el inventario de hosts del router (nombre, IP, MAC, interfaz y si está
+activo), que es más fiable que inferir por ARP. En la GUI, botón **Router…**
+con URL/usuario/contraseña; las credenciales solo viven en memoria.
+
+TR-064 tiene que estar activo en el router: *Home Network → Network → Network
+Settings → Allow access for applications*. Se habla HTTP plano (es lo que
+ofrece TR-064 en LAN), con autenticación digest MD5.
+
 ### Interfaz gráfica
 
 ```sh
@@ -136,6 +153,9 @@ troubleshooting): **[docs/LINUX.md](docs/LINUX.md)**
 - Conectar a una red reemplaza la asociación actual; en la GUI se bloquea el
   escaneo mientras dura el intento. No probado de extremo a extremo en este
   entorno para no cortar la conexión en uso.
+- TR-064 solo se implementa sobre HTTP (sin TLS) y con digest MD5, que es lo
+  que ofrece el FRITZ!Box en la LAN. Las credenciales del router no se
+  persisten: se piden en cada sesión.
 - La detección de "dispositivos conectados a TU red" se infiere por ARP: un
   dispositivo con firewall L2 agresivo podría no aparecer en el sondeo activo
   (seguiría apareciendo si habla con tu máquina).
@@ -149,5 +169,6 @@ troubleshooting): **[docs/LINUX.md](docs/LINUX.md)**
 - [x] Historial de clientes: nuevo/ausente entre snapshots en la TUI (TTL 5 min)
 - [x] Monitor mode en Linux (`--monitor`): captura pasiva 802.11 + channel hopping
 - [x] Cifrado por AP, estado del enlace actual y conexión con contraseña desde la GUI
+- [x] Módulo del router (FRITZ!Box TR-064): estado WAN, IP pública e inventario de hosts
+- [ ] WiFi de invitados / cambio de canal por TR-064
 - [ ] Resolución de nombres (mDNS/NBNS/SSDP)
-- [ ] Módulo del router (FRITZ!Box TR-064: WAN, hosts, WiFi invitados)
