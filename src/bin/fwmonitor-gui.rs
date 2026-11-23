@@ -310,6 +310,15 @@ impl App {
         if let Some(mut w) = self.router_win.take() {
             let (mut submit, mut close) = (false, false);
 
+            // Claves vistas por ARP para cruzar con el inventario del router.
+            let lan_ips: Vec<String> = self.snap.hosts.iter().map(|h| h.ip.clone()).collect();
+            let lan_macs: Vec<String> = self
+                .snap
+                .hosts
+                .iter()
+                .map(|h| h.mac.to_lowercase())
+                .collect();
+
             egui::Window::new("Router (TR-064)")
                 .collapsible(false)
                 .default_width(560.0)
@@ -391,16 +400,22 @@ impl App {
 
                         egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
                             egui::Grid::new("router_hosts")
-                                .num_columns(4)
+                                .num_columns(5)
                                 .striped(true)
                                 .spacing([12.0, 4.0])
                                 .show(ui, |ui| {
-                                    for h in ["Nombre", "IP", "MAC", "Estado"] {
+                                    for h in ["Nombre", "IP", "MAC", "Estado", "LAN"] {
                                         ui.strong(h);
                                     }
                                     ui.end_row();
 
                                     for h in &v.hosts {
+                                        let seen = lan_ips.iter().any(|ip| *ip == h.ip)
+                                            || (h.mac.len() > 5
+                                                && lan_macs
+                                                    .iter()
+                                                    .any(|mac| *mac == h.mac.to_lowercase()));
+
                                         ui.label(if h.name.is_empty() { "—" } else { &h.name });
                                         ui.label(RichText::new(&h.ip).monospace());
                                         ui.label(RichText::new(&h.mac).monospace());
@@ -408,6 +423,13 @@ impl App {
                                             RichText::new(if h.active {"activo"} else {"inactivo"})
                                                 .color(if h.active { GREEN } else { MUTED }),
                                         );
+                                        if seen {
+                                            ui.label(RichText::new("✓").color(GREEN));
+                                        } else {
+                                            ui.label(
+                                                RichText::new("solo router").color(ORANGE).small(),
+                                            );
+                                        }
                                         ui.end_row();
                                     }
                                 });
@@ -675,6 +697,16 @@ impl App {
                 ui.label(RichText::new(net).monospace().color(MUTED));
             }
         });
+        if !self.snap.lan_sweep {
+            ui.label(
+                RichText::new(
+                    "⚠ barrido ARP no disponible (sin CAP_NET_RAW): solo se ve la caché ARP. \
+                     Relanza con `sudo fwmonitor-gui` para descubrir todos los equipos.",
+                )
+                .color(ORANGE)
+                .small(),
+            );
+        }
         ui.add_space(2.0);
 
         if self.tracked.is_empty() {
@@ -693,13 +725,14 @@ impl App {
             .resizable(true)
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
             .sense(egui::Sense::click())
-            .column(Column::initial(150.0).at_least(110.0))
-            .column(Column::initial(160.0).at_least(130.0))
-            .column(Column::initial(70.0).at_least(55.0))
-            .column(Column::remainder().at_least(140.0).clip(true))
+            .column(Column::initial(125.0).at_least(100.0))
+            .column(Column::initial(145.0).at_least(90.0).clip(true))
+            .column(Column::initial(145.0).at_least(120.0))
+            .column(Column::initial(60.0).at_least(45.0))
+            .column(Column::remainder().at_least(120.0).clip(true))
             .column(Column::initial(80.0).at_least(65.0))
             .header(22.0, |mut header| {
-                for title in ["IP", "MAC", "Tipo", "Fabricante", "Estado"] {
+                for title in ["IP", "Nombre", "MAC", "Tipo", "Fabricante", "Estado"] {
                     header.col(|ui| {
                         ui.strong(title);
                     });
@@ -718,6 +751,13 @@ impl App {
 
                     row.col(|ui| {
                         ui.label(text(&t.host.ip).monospace());
+                    });
+                    row.col(|ui| {
+                        if t.host.name.is_empty() {
+                            ui.label(RichText::new("—").color(MUTED));
+                        } else {
+                            ui.label(text(&t.host.name));
+                        }
                     });
                     row.col(|ui| {
                         ui.label(text(&t.host.mac).monospace());
@@ -903,6 +943,10 @@ impl App {
                 ui.label(RichText::new(&t.host.ip).monospace());
                 ui.end_row();
 
+                ui.label(RichText::new("Nombre").color(MUTED));
+                ui.label(RichText::new(or_dash(&t.host.name)));
+                ui.end_row();
+
                 ui.label(RichText::new("MAC").color(MUTED));
                 ui.label(RichText::new(or_dash(&t.host.mac)).monospace());
                 ui.end_row();
@@ -1010,9 +1054,11 @@ fn scanner_loop(
         None => OuiDb::builtin(),
     };
     let mut history = ClientHistory::default();
+    // Nombres ya resueltos: evita repetir DNS/mDNS en cada escaneo.
+    let mut names = HashMap::new();
 
     loop {
-        let snap = model::snapshot(&oui);
+        let snap = model::snapshot_cached(&oui, &mut names);
         let tracked = history.update(&snap.hosts);
 
         if tx.send(Scan { snap, tracked }).is_err() {

@@ -37,6 +37,13 @@ En ambos casos:
 - **Historial de clientes**: en la TUI, cada host se marca como `nuevo`,
   normal o `ausente` (TTL 5 min) comparando snapshots. La identidad es la MAC,
   así que un host que cambia de IP sigue siendo el mismo.
+- **Descubrimiento LAN**: barrido ARP del /24 en paralelo más la caché ARP del
+  sistema. En Linux el barrido necesita `CAP_NET_RAW`; si no lo hay, la app lo
+  **avisa** en vez de fingir una red vacía y solo muestra los vecinos ya
+  cacheados (relanza con `sudo` para el inventario completo).
+- **Nombres de host**: se resuelven con NSS (`getent hosts`), así que
+  funcionan `/etc/hosts`, DNS inverso, mDNS (con `nss-mdns`) y WINS si están
+  instalados. Salen en `--once`, en la tabla LAN de la GUI y en el CSV.
 
 ## Uso
 
@@ -119,7 +126,7 @@ reconecta sola. En iwlwifi (Intel) no puede haber managed+monitor a la vez,
 por eso la captura es exclusiva: usa la Ethernet o planifica el intervalo.
 
 El CSV tiene una fila por dispositivo con columna `ts` (timestamp ISO UTC),
-`source` (wifi|lan) y todos los campos. Con `--csv-append` desde una tarea
+`source` (wifi|lan), `name` y todos los campos. Con `--csv-append` desde una tarea
 programada construyes un histórico de quién aparece en tu red y cuándo.
 
 ## Compilar
@@ -171,4 +178,6 @@ troubleshooting): **[docs/LINUX.md](docs/LINUX.md)**
 - [x] Cifrado por AP, estado del enlace actual y conexión con contraseña desde la GUI
 - [x] Módulo del router (FRITZ!Box TR-064): estado WAN, IP pública e inventario de hosts
 - [ ] WiFi de invitados / cambio de canal por TR-064
-- [ ] Resolución de nombres (mDNS/NBNS/SSDP)
+- [x] Nombres de host vía NSS (DNS/mDNS/WINS) y aviso de barrido degradado
+- [ ] Interrogación directa mDNS/SSDP (independiente de los módulos NSS)
+- [ ] Fingerprint de servicios por dispositivo (tipo: impresora, NAS, TV…)

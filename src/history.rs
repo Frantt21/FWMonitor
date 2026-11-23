@@ -161,6 +161,7 @@ mod tests {
             mac: mac.to_string(),
             kind: "ARP".to_string(),
             vendor: String::new(),
+            name: String::new(),
         }
     }
 

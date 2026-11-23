@@ -16,6 +16,7 @@ use windows::Win32::NetworkManagement::IpHelper::{
 };
 use windows::Win32::Networking::WinSock::AF_INET;
 
+use crate::lan::Discovery;
 use crate::model::LanHost;
 
 /// Red local detectada: interfaz, IP, prefijo y puerta de enlace.
@@ -27,8 +28,10 @@ pub struct LocalNet {
 }
 
 /// Descubre hosts de la LAN: sondeo ARP del /24 + entradas ya conocidas en la tabla ARP.
-pub fn discover(net: &LocalNet) -> anyhow::Result<Vec<LanHost>> {
-    let mut hosts = probe_sweep(net);
+pub fn discover(net: &LocalNet) -> anyhow::Result<Discovery> {
+    let swept = probe_sweep(net);
+    let sweep_ran = swept.is_some();
+    let mut hosts = swept.unwrap_or_default();
     hosts.extend(scan_hosts()?);
 
     // Fusionar por IP: preferimos el tipo de la tabla del sistema (Dynamic/Static)
@@ -45,15 +48,15 @@ pub fn discover(net: &LocalNet) -> anyhow::Result<Vec<LanHost>> {
             }
         }
     }
-    Ok(hosts)
+    Ok(Discovery { hosts, sweep_ran })
 }
 
 /// Sondeo ARP paralelo sobre /24. Los dispositivos responden ARP aunque tengan
 /// firewall ICMP, por lo que descubre más que un ping sweep.
-pub fn probe_sweep(net: &LocalNet) -> Vec<LanHost> {
+pub fn probe_sweep(net: &LocalNet) -> Option<Vec<LanHost>> {
     // Solo barrimos /24 y prefijos mayores (redes típicas domésticas)
     if net.prefix_len < 24 || net.prefix_len >= 32 {
-        return Vec::new();
+        return None;
     }
 
     let base = u32::from(net.ip) & (u32::MAX << (32 - net.prefix_len as u32));
@@ -81,6 +84,7 @@ pub fn probe_sweep(net: &LocalNet) -> Vec<LanHost> {
                         mac,
                         kind: "ARP".to_string(),
                         vendor: String::new(), // se resuelve en model::snapshot()
+                        name: String::new(),
                     });
                 }
             }
@@ -92,7 +96,7 @@ pub fn probe_sweep(net: &LocalNet) -> Vec<LanHost> {
 
     let mut result = found.lock().unwrap().clone();
     result.sort_by_key(|h| h.ip.parse::<Ipv4Addr>().ok());
-    result
+    Some(result)
 }
 
 /// Envía una petición ARP directa y devuelve la MAC si hay respuesta.
@@ -263,6 +267,7 @@ pub fn scan_hosts() -> anyhow::Result<Vec<LanHost>> {
                 mac: mac_to_string(mac_bytes),
                 kind: ipnet_kind_to_string(kind).to_string(),
                 vendor: String::new(), // se resuelve en model::snapshot()
+                name: String::new(),
             });
         }
     }

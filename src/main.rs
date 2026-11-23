@@ -220,6 +220,7 @@ fn monitor_mode(args: &Args, oui: &OuiDb) -> anyhow::Result<()> {
             hosts: Vec::new(),
             net: None,
             link: None,
+            lan_sweep: false,
             errors: Vec::new(),
         };
         if let Some(path) = &args.csv {
@@ -334,17 +335,23 @@ fn print_once(snap: &model::Snapshot) {
             ap.vendor
         );
     }
-    println!("\n=== LAN ({} hosts, tabla ARP) ===", snap.hosts.len());
+    if !snap.lan_sweep {
+        eprintln!(
+            "⚠ LAN: barrido ARP no disponible (falta CAP_NET_RAW); solo la caché ARP del sistema"
+        );
+    }
+    println!("\n=== LAN ({} hosts) ===", snap.hosts.len());
     println!(
-        "{:<16} {:<18} {:<8} Fabricante",
-        "IP", "MAC", "Tipo"
+        "{:<16} {:<18} {:<8} {:<24} Fabricante",
+        "IP", "MAC", "Tipo", "Nombre"
     );
     for h in &snap.hosts {
         println!(
-            "{:<16} {:<18} {:<8} {}",
+            "{:<16} {:<18} {:<8} {:<24} {}",
             h.ip,
             h.mac,
             h.kind,
+            truncate(if h.name.is_empty() { "—" } else { &h.name }, 24),
             h.vendor
         );
     }

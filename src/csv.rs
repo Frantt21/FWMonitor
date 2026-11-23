@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::model::Snapshot;
 
-const HEADER: &str = "ts,source,ssid,ip,bssid,mac,channel,rssi,phy,kind,vendor";
+const HEADER: &str = "ts,source,ssid,ip,bssid,mac,channel,rssi,phy,kind,vendor,name";
 
 /// Escapa un campo CSV: entrecomilla si contiene coma, comilla o salto de línea.
 fn esc(s: &str) -> String {
@@ -38,6 +38,31 @@ fn iso_from_unix(secs: u64) -> String {
     format!("{y:04}-{month:02}-{d:02}T{h:02}:{min:02}:{sec:02}Z")
 }
 
+/// Una fila WiFi con las mismas columnas que [`HEADER`].
+fn wifi_row(ts: &str, ap: &crate::model::WifiAp) -> String {
+    format!(
+        "{ts},wifi,{},,{},,{},{},{},,{},\n",
+        esc(&ap.ssid),
+        esc(&ap.bssid),
+        ap.channel,
+        ap.rssi,
+        esc(&ap.phy),
+        esc(&ap.vendor),
+    )
+}
+
+/// Una fila LAN con las mismas columnas que [`HEADER`].
+fn lan_row(ts: &str, h: &crate::model::LanHost) -> String {
+    format!(
+        "{ts},lan,,{},,{},,,,{},{},{}\n",
+        esc(&h.ip),
+        esc(&h.mac),
+        esc(&h.kind),
+        esc(&h.vendor),
+        esc(&h.name),
+    )
+}
+
 fn now_iso() -> String {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -60,29 +85,11 @@ pub fn export(path: &Path, snap: &Snapshot, append: bool) -> anyhow::Result<()> 
     }
 
     for ap in &snap.aps {
-        rows.push_str(&format!(
-            "{},{},{},,,{},{},{},{},{}\n",
-            ts,
-            "wifi",
-            esc(&ap.ssid),
-            esc(&ap.bssid),
-            ap.channel,
-            ap.rssi,
-            esc(&ap.phy),
-            esc(&ap.vendor),
-        ));
+        rows.push_str(&wifi_row(&ts, ap));
     }
 
     for h in &snap.hosts {
-        rows.push_str(&format!(
-            "{},{},,{},{},,,,,{},{}\n",
-            ts,
-            "lan",
-            esc(&h.ip),
-            esc(&h.mac),
-            esc(&h.kind),
-            esc(&h.vendor),
-        ));
+        rows.push_str(&lan_row(&ts, h));
     }
 
     if append {
@@ -109,6 +116,29 @@ mod tests {
         assert_eq!(iso_from_unix(1_790_380_800), "2026-09-26T00:00:00Z");
         // Año bisiesto: 2024-02-29T12:00:00Z = 1709208000
         assert_eq!(iso_from_unix(1_709_208_000), "2024-02-29T12:00:00Z");
+    }
+
+    #[test]
+    fn filas_con_tantas_columnas_como_la_cabecera() {
+        let expected = HEADER.split(',').count();
+        let ap = crate::model::WifiAp {
+            ssid: "MiRed".into(),
+            bssid: "a0:08:6f:9e:8f:68".into(),
+            rssi: -41,
+            phy: "HT (11n)".into(),
+            channel: 7,
+            vendor: "AVM".into(),
+            encryption: "WPA2".into(),
+        };
+        let host = crate::model::LanHost {
+            ip: "192.168.1.5".into(),
+            mac: "aa:bb:cc:dd:ee:ff".into(),
+            kind: "ARP".into(),
+            vendor: "".into(),
+            name: "tv-salon".into(),
+        };
+        assert_eq!(wifi_row("2026-01-01T00:00:00Z", &ap).trim_end().split(',').count(), expected);
+        assert_eq!(lan_row("2026-01-01T00:00:00Z", &host).trim_end().split(',').count(), expected);
     }
 
     #[test]

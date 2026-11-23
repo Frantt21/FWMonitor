@@ -1,5 +1,7 @@
 //! Modelos de datos y captura del snapshot combinando WiFi + LAN.
 
+use std::collections::HashMap;
+
 use crate::{lan, oui::OuiDb, wifi};
 
 /// Un punto de acceso (BSSID) visto por la tarjeta.
@@ -52,6 +54,8 @@ pub struct LanHost {
     pub kind: String,
     /// Fabricante según OUI de la MAC
     pub vendor: String,
+    /// Nombre resuelto por NSS (DNS/mDNS/WINS); vacío si no se conoce.
+    pub name: String,
 }
 
 /// Fotografía del estado de la red en un instante dado.
@@ -64,10 +68,19 @@ pub struct Snapshot {
     pub net: Option<String>,
     /// Enlace WiFi actual (None si no hay asociación)
     pub link: Option<LinkInfo>,
+    /// `false` si el barrido ARP no pudo ejecutarse (sin CAP_NET_RAW):
+    /// la lista LAN es solo la caché ARP del sistema.
+    pub lan_sweep: bool,
     pub errors: Vec<String>,
 }
 
 pub fn snapshot(oui: &OuiDb) -> Snapshot {
+    snapshot_cached(oui, &mut HashMap::new())
+}
+
+/// Igual que [`snapshot`] pero reutiliza la caché de nombres entre escaneos
+/// (resolver DNS/mDNS cuesta ~ms por host y no hace falta repetirlo).
+pub fn snapshot_cached(oui: &OuiDb, names: &mut HashMap<String, String>) -> Snapshot {
     let mut snap = Snapshot::default();
 
     match wifi::scan_aps() {
@@ -96,7 +109,11 @@ pub fn snapshot(oui: &OuiDb) -> Snapshot {
                     .unwrap_or_else(|| "—".into())
             ));
             match lan::discover(&net) {
-                Ok(hosts) => snap.hosts = hosts,
+                Ok(disc) => {
+                    snap.lan_sweep = disc.sweep_ran;
+                    snap.hosts = disc.hosts;
+                    resolve_names(&mut snap.hosts, names);
+                }
                 Err(e) => snap.errors.push(format!("LAN: {e}")),
             }
         }
@@ -113,4 +130,24 @@ pub fn snapshot(oui: &OuiDb) -> Snapshot {
 
     snap.aps.sort_by_key(|ap| std::cmp::Reverse(ap.rssi));
     snap
+}
+
+/// Completa el nombre de cada host, con presupuesto para no eternizar el
+/// escaneo: los desconocidos se reintentan en el siguiente ciclo.
+fn resolve_names(hosts: &mut [LanHost], cache: &mut HashMap<String, String>) {
+    let mut budget = 48;
+    for host in hosts.iter_mut() {
+        if let Some(name) = cache.get(&host.ip) {
+            host.name = name.clone();
+            continue;
+        }
+        if budget == 0 {
+            continue;
+        }
+        budget -= 1;
+        if let Some(name) = lan::lookup_name(&host.ip) {
+            host.name = name.clone();
+            cache.insert(host.ip.clone(), name);
+        }
+    }
 }
