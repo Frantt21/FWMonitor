@@ -124,9 +124,33 @@ pub fn scan_aps() -> anyhow::Result<(String, Vec<WifiAp>)> {
     let ifaces = nlsock
         .get_interfaces_info()
         .map_err(|e| anyhow::anyhow!("get_interfaces_info: {e}"))?;
+    // `get_interfaces_info` incluye wdevs sin netdev (p. ej. la interfaz
+    // virtual P2P-device que crea iwlwifi): esas no tienen `AttrIfindex` y el
+    // dump de BSS falla con "Interfaz sin índice netlink". Elegimos la primera
+    // que sí sea un netdev (índice + nombre).
     let iface = ifaces
-        .first()
-        .ok_or_else(|| anyhow::anyhow!("No hay interfaces WiFi"))?;
+        .iter()
+        .find(|i| i.index.is_some() && i.name.is_some())
+        .or_else(|| ifaces.iter().find(|i| i.index.is_some()))
+        .ok_or_else(|| {
+            let vistas: Vec<String> = ifaces
+                .iter()
+                .map(|i| {
+                    i.name
+                        .as_ref()
+                        .map(|n| ifname_to_string(n))
+                        .unwrap_or_else(|| "(sin nombre)".to_string())
+                })
+                .collect();
+            anyhow::anyhow!(
+                "No hay interfaces WiFi con ifindex (vistas: {})",
+                if vistas.is_empty() {
+                    "ninguna".to_string()
+                } else {
+                    vistas.join(", ")
+                }
+            )
+        })?;
 
     let iface_name = iface
         .name
