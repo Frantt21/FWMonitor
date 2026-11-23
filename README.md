@@ -66,6 +66,31 @@ sudo fwmonitor --monitor --monitor-channels 1-13,36,44,149   # soporta listas y 
 sudo fwmonitor --monitor --monitor-iface wlan0 --csv mon.csv
 ```
 
+### Permisos (barrido ARP)
+
+En Linux el sondeo ARP necesita `CAP_NET_RAW`. Si falta, el binario **pide
+elevación y se relanza una sola vez**: con `pkexec` en la GUI y con `sudo` en la
+TUI (devolviendo al hijo el `DISPLAY`/`WAYLAND_DISPLAY`/`XDG_RUNTIME_DIR` para
+que abra la ventana). Si cancelas o no hay mecanismo disponible, sigue sin
+privilegios, lo avisa y muestra solo la caché ARP.
+
+```sh
+fwmonitor                     # TUI: intenta sudo al arrancar
+fwmonitor --once --elevate    # captura puntual con elevación
+fwmonitor --no-elevate        # nunca pedir (scripts, cron)
+fwmonitor-gui --no-elevate    # idem para la ventana
+```
+
+Alternativa sin pregunta en cada arranque (binario de confianza, solo Linux):
+
+```sh
+sudo setcap cap_net_raw,cap_net_admin+eip ./target/release/fwmonitor
+sudo setcap cap_net_raw,cap_net_admin+eip ./target/release/fwmonitor-gui
+```
+
+En Windows no aplica: `SendARP` funciona sin elevación. Solo `netsh`/revelar
+contraseñas exige administrador, y eso se informa en el diálogo.
+
 ### Router (FRITZ!Box TR-064)
 
 ```sh

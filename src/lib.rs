@@ -4,6 +4,7 @@
 
 pub mod connect;
 pub mod csv;
+pub mod elevate;
 pub mod history;
 pub mod lan;
 #[cfg(target_os = "linux")]

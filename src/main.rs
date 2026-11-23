@@ -2,7 +2,7 @@
 //! Windows: escaneo BSSID (Native WiFi API) + descubrimiento ARP.
 //! Linux: nl80211 + AF_PACKET, con modo monitor 802.11 opcional (--monitor).
 
-use fwmonitor::{csv, history, model, router, ui};
+use fwmonitor::{csv, elevate, history, model, router, ui};
 #[cfg(target_os = "linux")]
 use fwmonitor::monitor;
 
@@ -71,10 +71,29 @@ struct Args {
         hide_env_values = true
     )]
     router_pass: Option<String>,
+
+    /// Relanzar con privilegios si falta CAP_NET_RAW (por defecto en la TUI)
+    #[arg(long, default_value_t = false)]
+    elevate: bool,
+    /// No pedir privilegios nunca
+    #[arg(long, default_value_t = false)]
+    no_elevate: bool,
 }
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+
+    // La TUI (interactiva) pide privilegios por defecto; las capturas puntuales
+    // (`--once`, CSV, router) solo si se pide con `--elevate`, y el modo monitor
+    // ya exige root explícitamente.
+    let interactive = !args.once
+        && args.csv.is_none()
+        && args.csv_append.is_none()
+        && !args.monitor
+        && !args.router;
+    if !args.no_elevate && (args.elevate || interactive) && elevate::maybe_relaunch(false) {
+        return Ok(());
+    }
 
     let oui = match &args.oui_db {
         Some(path) => OuiDb::load_external(path)?,

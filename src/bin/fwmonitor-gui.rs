@@ -42,10 +42,18 @@ struct Args {
     /// Cargar base OUI externa (oui.csv de IEEE o manuf de Wireshark)
     #[arg(long, value_name = "FILE")]
     oui_db: Option<PathBuf>,
+    /// No pedir privilegios al arrancar (se queda solo con la caché ARP)
+    #[arg(long, default_value_t = false)]
+    no_elevate: bool,
 }
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+
+    // El barrido ARP necesita CAP_NET_RAW: pedir privilegios con pkexec una vez.
+    if !args.no_elevate && fwmonitor::elevate::maybe_relaunch(true) {
+        return Ok(());
+    }
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
