@@ -2,15 +2,9 @@
 //! Windows: escaneo BSSID (Native WiFi API) + descubrimiento ARP.
 //! Linux: nl80211 + AF_PACKET, con modo monitor 802.11 opcional (--monitor).
 
-mod csv;
-mod history;
-mod lan;
+use fwmonitor::{csv, history, model, ui};
 #[cfg(target_os = "linux")]
-mod monitor;
-mod model;
-mod oui;
-mod ui;
-mod wifi;
+use fwmonitor::monitor;
 
 use std::io::stdout;
 use std::path::PathBuf;
@@ -23,7 +17,7 @@ use ratatui::{
     Terminal,
 };
 
-use crate::oui::OuiDb;
+use fwmonitor::oui::OuiDb;
 
 /// Monitor de dispositivos en tu red WiFi, vivo en la terminal.
 #[derive(Parser, Debug)]

@@ -59,6 +59,25 @@ sudo fwmonitor --monitor --monitor-channels 1-13,36,44,149   # soporta listas y 
 sudo fwmonitor --monitor --monitor-iface wlan0 --csv mon.csv
 ```
 
+### Interfaz gráfica
+
+```sh
+cargo run --release --bin fwmonitor-gui          # ventana (egui/eframe)
+cargo run --release --bin fwmonitor-gui -- -i 3  # escaneo cada 3 s
+```
+
+Misma captura que la TUI, en una ventana: el escaneo corre en un hilo aparte
+(así el sondeo ARP no congela la interfaz), la tabla de APs sale ordenada por
+señal y la de LAN mantiene el estado `nuevo`/`ausente` del historial.
+
+El histórico de señal se muestrea en cada escaneo desde que abres la ventana
+(240 muestras por BSSID, ~20 min a 5 s). La columna **Histórico** de la tabla
+WiFi dibuja la tendencia de cada red; al hacer clic en una fila se abre el
+panel **Detalle** a la derecha con todos los campos del AP o del host y, para
+APs, el mismo histórico ampliado con ejes en dBm, mínimo, media y máximo.
+`Esc` o el botón `Cerrar` deseleccionan. El modo monitor 802.11 sigue siendo solo de la TUI
+(`--monitor`).
+
 En modo monitor la tarjeta se pone en modo pasivo y captura beacons del aire
 con hopping de canal: ves **todas** las redes alcanzables (no solo las que
 devuelve el escaneo del driver), con contadores de beacons/frames de datos por
