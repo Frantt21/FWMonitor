@@ -33,6 +33,7 @@ windows = { version = "0.58", features = [
 neli = "0.6"
 neli-wifi = "0.6.1"
 libc = "0.2"
+zbus = "5"
 
 [profile.release]
 lto = true

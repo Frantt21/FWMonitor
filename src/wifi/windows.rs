@@ -3,16 +3,20 @@
 
 #![cfg(windows)]
 
+use std::ffi::c_void;
 use std::time::Duration;
 
 use windows::core::GUID;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::NetworkManagement::WiFi::{
-    WlanCloseHandle, WlanEnumInterfaces, WlanFreeMemory, WlanGetNetworkBssList, WlanOpenHandle,
-    WlanScan, WLAN_BSS_ENTRY, WLAN_BSS_LIST, WLAN_INTERFACE_INFO_LIST,
+    wlan_intf_opcode_channel_number, wlan_intf_opcode_current_connection,
+    wlan_interface_state_connected, WlanCloseHandle, WlanEnumInterfaces, WlanFreeMemory,
+    WlanGetNetworkBssList, WlanOpenHandle, WlanQueryInterface, WlanScan, WLAN_BSS_ENTRY,
+    WLAN_BSS_LIST, WLAN_CONNECTION_ATTRIBUTES, WLAN_INTERFACE_INFO_LIST,
 };
 
-use crate::model::WifiAp;
+use crate::model::{LinkInfo, WifiAp};
+use crate::wifi::security_from_ies;
 
 fn mac_to_string(mac: &[u8]) -> String {
     mac.iter()
@@ -138,6 +142,15 @@ unsafe fn collect_aps(session: &WlanSession) -> anyhow::Result<Vec<WifiAp>> {
         let bss_list = &*bss_list_ptr;
         for i in 0..bss_list.dwNumberOfItems as usize {
             let entry: &WLAN_BSS_ENTRY = &*bss_list.wlanBssEntries.as_ptr().add(i);
+
+            // WLAN_BSS_ENTRY guarda un blob de IEs a `ulIeOffset` bytes del
+            // comienzo de la propia entrada.
+            let ies = std::slice::from_raw_parts(
+                (entry as *const WLAN_BSS_ENTRY as *const u8).add(entry.ulIeOffset as usize),
+                entry.ulIeSize as usize,
+            );
+            let privacy = entry.usCapabilityInformation & 0x0010 != 0;
+
             aps.push(WifiAp {
                 ssid: ssid_to_string(&entry.dot11Ssid),
                 bssid: mac_to_string(&entry.dot11Bssid),
@@ -145,6 +158,7 @@ unsafe fn collect_aps(session: &WlanSession) -> anyhow::Result<Vec<WifiAp>> {
                 phy: dot11_phy_to_string(entry.dot11BssPhyType.0),
                 channel: freq_to_channel(entry.ulChCenterFrequency),
                 vendor: String::new(), // se resuelve en model::snapshot()
+                encryption: security_from_ies(ies, privacy).to_string(),
             });
         }
         WlanFreeMemory(bss_list_ptr as *const _);
@@ -164,6 +178,84 @@ pub fn scan_aps() -> anyhow::Result<(String, Vec<WifiAp>)> {
 
         let aps = collect_aps(&session)?;
         Ok((session.iface_name.clone(), aps))
+    }
+}
+
+/// Ejecuta un cierre con el handle y el GUID de la interfaz WiFi abierta.
+/// Lo usa `connect` para crear perfiles y asociar sin duplicar el setup.
+pub(crate) fn with_wlan<T>(f: impl FnOnce(HANDLE, &GUID) -> T) -> anyhow::Result<T> {
+    let session = unsafe { open_session()? };
+    Ok(f(session.handle, &session.guid))
+}
+
+/// Estado del enlace de la interfaz conectada (None si no hay asociación).
+pub fn link_info() -> anyhow::Result<Option<LinkInfo>> {
+    unsafe {
+        let session = open_session()?;
+
+        let mut size = 0u32;
+        let mut data: *mut c_void = std::ptr::null_mut();
+        let rc = WlanQueryInterface(
+            session.handle,
+            &session.guid,
+            wlan_intf_opcode_current_connection,
+            None,
+            &mut size,
+            &mut data,
+            None,
+        );
+        if rc != 0 || data.is_null() {
+            return Ok(None);
+        }
+
+        let attrs = &*(data as *const WLAN_CONNECTION_ATTRIBUTES);
+        let connected = attrs.isState == wlan_interface_state_connected;
+        let ssid = if connected {
+            ssid_to_string(&attrs.wlanAssociationAttributes.dot11Ssid)
+        } else {
+            String::new()
+        };
+        let assoc = &attrs.wlanAssociationAttributes;
+        // Windows da calidad 0-100; aproximamos dBm como en la documentación.
+        let rssi = (assoc.wlanSignalQuality as i32) / 2 - 100;
+        let bssid = mac_to_string(&assoc.dot11Bssid);
+        let tx_mbps = assoc.ulTxRate as f64 / 1000.0;
+        let rx_mbps = assoc.ulRxRate as f64 / 1000.0;
+        WlanFreeMemory(data);
+
+        if !connected || ssid.is_empty() {
+            return Ok(None);
+        }
+
+        // Canal actual: consulta aparte (devuelve un ULONG).
+        let mut ch_size = 0u32;
+        let mut ch_data: *mut c_void = std::ptr::null_mut();
+        let mut channel = 0u8;
+        if WlanQueryInterface(
+            session.handle,
+            &session.guid,
+            wlan_intf_opcode_channel_number,
+            None,
+            &mut ch_size,
+            &mut ch_data,
+            None,
+        ) == 0
+            && !ch_data.is_null()
+        {
+            channel = (*(ch_data as *const u32)) as u8;
+            WlanFreeMemory(ch_data);
+        }
+
+        Ok(Some(LinkInfo {
+            ssid,
+            bssid,
+            rssi,
+            channel,
+            tx_mbps: Some(tx_mbps),
+            rx_mbps: Some(rx_mbps),
+            connected_secs: None,
+            tx_retries: None,
+        }))
     }
 }
 

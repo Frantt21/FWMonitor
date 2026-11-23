@@ -2,6 +2,7 @@
 //! interfaz. Lo comparten el binario de terminal (`fwmonitor`) y el de
 //! escritorio (`fwmonitor-gui`).
 
+pub mod connect;
 pub mod csv;
 pub mod history;
 pub mod lan;

@@ -24,7 +24,8 @@ use neli_wifi::{
 };
 
 use crate::model::WifiAp;
-use crate::wifi::linux::{ifname_to_string, parse_ies};
+use crate::wifi::linux::ifname_to_string;
+use crate::wifi::{parse_ies, security_from_ies};
 
 // ---------------------------------------------------------------------------
 // nl80211: set interface type + set channel
@@ -282,6 +283,8 @@ pub struct FrameInfo {
     pub bad_fcs: bool,
     /// Frecuencia de recepción del radiotap (0 = no disponible)
     pub freq_mhz: u16,
+    /// Cifrado anunciado (abierta, WPA2, WPA3...)
+    pub security: &'static str,
 }
 
 /// Clasifica un frame capturado (con o sin radiotap delante).
@@ -295,6 +298,7 @@ pub fn classify_frame(pkt: &[u8]) -> FrameInfo {
         rssi: rt.rssi as i32,
         bad_fcs: rt.bad_fcs,
         freq_mhz: rt.freq_mhz,
+        security: "abierta",
     };
     if f.len() < 24 {
         return info;
@@ -317,6 +321,9 @@ pub fn classify_frame(pkt: &[u8]) -> FrameInfo {
             if f.len() > 36 {
                 let (ssid, _) = parse_ies(&f[36..]);
                 info.ssid = ssid;
+                // Capability (offset 34): bit 4 = Privacy
+                let privacy = f.get(34..36).is_some_and(|b| b[0] & 0x10 != 0);
+                info.security = security_from_ies(&f[36..], privacy);
             }
         }
         (0, 5) => {
@@ -324,6 +331,8 @@ pub fn classify_frame(pkt: &[u8]) -> FrameInfo {
             if f.len() > 36 {
                 let (ssid, _) = parse_ies(&f[36..]);
                 info.ssid = ssid;
+                let privacy = f.get(34..36).is_some_and(|b| b[0] & 0x10 != 0);
+                info.security = security_from_ies(&f[36..], privacy);
             }
         }
         (0, 4) => info.kind = FrameKind::ProbeReq,
@@ -350,6 +359,8 @@ pub struct LiveAp {
     pub data_frames: u32,
     pub first_seen: u64,
     pub last_seen: u64,
+    /// Cifrado anunciado en el último beacon
+    pub security: String,
 }
 
 /// Registro vivo de APs durante la captura monitor.
@@ -373,7 +384,9 @@ impl LiveAps {
                 data_frames: 0,
                 first_seen: now,
                 last_seen: now,
+                security: fi.security.to_string(),
             });
+        entry.security = fi.security.to_string();
         if let Some(ssid) = &fi.ssid {
             if !ssid.is_empty() {
                 entry.ssid = ssid.clone();
@@ -401,6 +414,7 @@ impl LiveAps {
                 data_frames: 0,
                 first_seen: now,
                 last_seen: now,
+                security: "—".to_string(),
             });
         entry.data_frames += 1;
         entry.last_seen = now;
@@ -828,6 +842,7 @@ pub fn to_snapshot_aps(live: &LiveAps, oui: &crate::oui::OuiDb) -> Vec<WifiAp> {
                 phy: "802.11 (monitor)".to_string(),
                 channel: ap.channel,
                 vendor,
+                encryption: ap.security,
             }
         })
         .collect()

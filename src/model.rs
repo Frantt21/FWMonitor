@@ -15,6 +15,32 @@ pub struct WifiAp {
     pub channel: u8,
     /// Fabricante según OUI del BSSID
     pub vendor: String,
+    /// Cifrado anunciado: abierta, WEP, WPA, WPA2, WPA3, WPA2/WPA3...
+    pub encryption: String,
+}
+
+impl WifiAp {
+    /// `true` si el AP no anuncia cifrado (red abierta).
+    pub fn is_open(&self) -> bool {
+        self.encryption == "abierta"
+    }
+}
+
+/// Estado del enlace de la interfaz conectada.
+#[derive(Clone, Debug)]
+pub struct LinkInfo {
+    pub ssid: String,
+    pub bssid: String,
+    /// dBm de la señal actual
+    pub rssi: i32,
+    pub channel: u8,
+    /// Mbps negociados con el AP
+    pub tx_mbps: Option<f64>,
+    pub rx_mbps: Option<f64>,
+    /// Segundos desde que se asoció (solo Linux)
+    pub connected_secs: Option<u32>,
+    /// Reintentos de TX acumulados (solo Linux)
+    pub tx_retries: Option<u32>,
 }
 
 /// Un host conocido en la red local.
@@ -36,6 +62,8 @@ pub struct Snapshot {
     pub hosts: Vec<LanHost>,
     /// Resumen de la red local (interfaz/IP/prefijo/puerta de enlace)
     pub net: Option<String>,
+    /// Enlace WiFi actual (None si no hay asociación)
+    pub link: Option<LinkInfo>,
     pub errors: Vec<String>,
 }
 
@@ -48,6 +76,11 @@ pub fn snapshot(oui: &OuiDb) -> Snapshot {
             snap.aps = aps;
         }
         Err(e) => snap.errors.push(format!("WiFi: {e}")),
+    }
+
+    match wifi::link_info() {
+        Ok(link) => snap.link = link,
+        Err(e) => snap.errors.push(format!("Enlace: {e}")),
     }
 
     // Sondeo ARP de la red local + tabla ARP del sistema

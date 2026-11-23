@@ -196,6 +196,7 @@ fn monitor_mode(args: &Args, oui: &OuiDb) -> anyhow::Result<()> {
             aps: snap_aps,
             hosts: Vec::new(),
             net: None,
+            link: None,
             errors: Vec::new(),
         };
         if let Some(path) = &args.csv {
@@ -221,6 +222,16 @@ fn print_once(snap: &model::Snapshot) {
     if let Some(net) = &snap.net {
         println!("Red local: {net}");
     }
+    if let Some(link) = &snap.link {
+        let rates = match (link.tx_mbps, link.rx_mbps) {
+            (Some(tx), Some(rx)) => format!(" · {tx:.0}/{rx:.0} Mbps"),
+            _ => String::new(),
+        };
+        println!(
+            "Enlace: {} ({}) {} dBm · canal {}{rates}",
+            link.ssid, link.bssid, link.rssi, link.channel
+        );
+    }
     if !snap.errors.is_empty() {
         for e in &snap.errors {
             eprintln!("⚠ {e}");
@@ -228,16 +239,17 @@ fn print_once(snap: &model::Snapshot) {
     }
     println!("\n=== WiFi ({} BSSIDs) ===", snap.aps.len());
     println!(
-        "{:<32} {:<18} {:>6} {:>4}  {:<13} Fabricante",
-        "SSID", "BSSID", "RSSI", "CH", "PHY"
+        "{:<32} {:<18} {:>6} {:>4}  {:<16} {:<13} Fabricante",
+        "SSID", "BSSID", "RSSI", "CH", "Cifrado", "PHY"
     );
     for ap in &snap.aps {
         println!(
-            "{:<32} {:<18} {:>6} {:>4}  {:<13} {}",
+            "{:<32} {:<18} {:>6} {:>4}  {:<16} {:<13} {}",
             truncate(&ap.ssid, 32),
             ap.bssid,
             format!("{} dBm", ap.rssi),
             ap.channel,
+            truncate(&ap.encryption, 16),
             truncate(&ap.phy, 13),
             ap.vendor
         );

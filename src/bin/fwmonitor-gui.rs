@@ -11,6 +11,7 @@ use clap::Parser;
 use eframe::egui::{self, Color32, RichText};
 use egui_extras::{Column, TableBuilder};
 
+use fwmonitor::connect;
 use fwmonitor::history::{ClientHistory, Presence, TrackedHost};
 use fwmonitor::model::{self, Snapshot};
 use fwmonitor::oui::OuiDb;
@@ -81,6 +82,29 @@ enum Selection {
 /// Historia de señal de un BSSID: (instante de la muestra, dBm).
 type Series = VecDeque<(Instant, i32)>;
 
+/// Resultado de una operación lanzada en segundo plano (conectar, revelar).
+enum OpResult {
+    Connected(Result<String, String>),
+    Revealed { ssid: String, result: Result<String, String> },
+}
+
+/// Diálogo de conexión a una red.
+struct ConnectDialog {
+    ssid: String,
+    password: String,
+    show_password: bool,
+    /// La red no anuncia cifrado: no hace falta contraseña.
+    open: bool,
+    busy: bool,
+    error: Option<String>,
+}
+
+/// Contraseña revelada de la red actual (o el error al intentarlo).
+struct Revealed {
+    ssid: String,
+    result: Result<String, String>,
+}
+
 struct App {
     scan_rx: Receiver<Scan>,
     /// Pedir un escaneo inmediato al hilo de fondo.
@@ -94,6 +118,12 @@ struct App {
     selected: Option<Selection>,
     /// Señal por BSSID, muestreada en cada escaneo.
     series: HashMap<String, Series>,
+    ctx: egui::Context,
+    dialog: Option<ConnectDialog>,
+    revealed: Option<Revealed>,
+    notice: Option<String>,
+    ops_tx: Sender<OpResult>,
+    ops_rx: Receiver<OpResult>,
 }
 
 impl App {
@@ -101,6 +131,7 @@ impl App {
         let interval = interval.max(1);
         let (scan_tx, scan_rx) = channel();
         let (cmd_tx, cmd_rx) = channel();
+        let (ops_tx, ops_rx) = channel();
         let ctx = cc.egui_ctx.clone();
 
         thread::spawn(move || {
@@ -123,7 +154,146 @@ impl App {
             scanning: true,
             selected: None,
             series: HashMap::new(),
+            ctx: cc.egui_ctx.clone(),
+            dialog: None,
+            revealed: None,
+            notice: None,
+            ops_tx,
+            ops_rx,
         }
+    }
+
+    /// Lanza la conexión a una red en un hilo aparte (D-Bus/WLAN pueden tardar).
+    fn start_connect(&mut self, ssid: String, password: Option<String>) {
+        let (ctx, tx) = (self.ctx.clone(), self.ops_tx.clone());
+        thread::spawn(move || {
+            let res = connect::connect(&ssid, password.as_deref()).map_err(|e| e.to_string());
+            let _ = tx.send(OpResult::Connected(res.map(|_| ssid)));
+            ctx.request_repaint();
+        });
+    }
+
+    /// Diálogo de conexión y ventana con la contraseña revelada.
+    fn windows(&mut self, ctx: &egui::Context) {
+        if let Some(mut d) = self.dialog.take() {
+            let (mut submit, mut close) = (false, false);
+
+            egui::Window::new("Conectar a red")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.label(RichText::new("Red").color(MUTED));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut d.ssid).desired_width(240.0),
+                    );
+
+                    if d.open {
+                        ui.add_space(6.0);
+                        ui.label(RichText::new("Red abierta: sin contraseña").color(MUTED));
+                    } else {
+                        ui.add_space(6.0);
+                        ui.label(RichText::new("Contraseña").color(MUTED));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut d.password)
+                                .password(!d.show_password)
+                                .desired_width(240.0),
+                        );
+                        ui.checkbox(&mut d.show_password, "Mostrar contraseña");
+                    }
+
+                    if let Some(err) = &d.error {
+                        ui.add_space(4.0);
+                        ui.label(RichText::new(err).color(RED));
+                    }
+
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        let can = !d.busy
+                            && !d.ssid.trim().is_empty()
+                            && (d.open || !d.password.is_empty());
+                        if ui
+                            .add_enabled(can, egui::Button::new("Conectar"))
+                            .clicked()
+                        {
+                            submit = true;
+                        }
+                        if d.busy {
+                            ui.spinner();
+                        }
+                        if ui.button("Cancelar").clicked() {
+                            close = true;
+                        }
+                    });
+                });
+
+            if submit {
+                let ssid = d.ssid.trim().to_string();
+                let password = if d.open {
+                    None
+                } else {
+                    Some(d.password.clone())
+                };
+                d.busy = true;
+                d.error = None;
+                self.start_connect(ssid, password);
+            }
+            if close {
+                self.dialog = None;
+            } else {
+                self.dialog = Some(d);
+            }
+        }
+
+        if let Some(rev) = self.revealed.take() {
+            let mut close = false;
+
+            egui::Window::new(format!("Contraseña · {}", rev.ssid))
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| match &rev.result {
+                    Ok(psk) => {
+                        let mut shown = psk.clone();
+                        ui.add(
+                            egui::TextEdit::singleline(&mut shown)
+                                .font(egui::TextStyle::Monospace)
+                                .desired_width(260.0),
+                        );
+                        ui.horizontal(|ui| {
+                            if ui.button("Copiar").clicked() {
+                                ui.ctx().copy_text(psk.clone());
+                            }
+                            if ui.button("Cerrar").clicked() {
+                                close = true;
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        ui.label(RichText::new(e).color(RED));
+                        ui.label(
+                            RichText::new("Requiere permisos para leer secretos de NetworkManager.")
+                                .color(MUTED),
+                        );
+                        if ui.button("Cerrar").clicked() {
+                            close = true;
+                        }
+                    }
+                });
+
+            if !close {
+                self.revealed = Some(rev);
+            }
+        }
+    }
+
+    /// Lanza la lectura de la contraseña guardada de la red activa.
+    fn start_reveal(&mut self, ssid: String) {
+        let (ctx, tx) = (self.ctx.clone(), self.ops_tx.clone());
+        thread::spawn(move || {
+            let res = connect::reveal_password(&ssid).map_err(|e| e.to_string());
+            let _ = tx.send(OpResult::Revealed { ssid, result: res });
+            ctx.request_repaint();
+        });
     }
 
     fn header(&mut self, ui: &mut egui::Ui) {
@@ -159,6 +329,50 @@ impl App {
                 }
             });
         });
+
+        let mut reveal_request: Option<String> = None;
+        ui.horizontal(|ui| {
+            match &self.snap.link {
+                Some(link) => {
+                    ui.label(RichText::new("Conectado:").color(MUTED));
+                    ui.label(RichText::new(&link.ssid).strong());
+                    ui.label(RichText::new(&link.bssid).monospace().color(MUTED));
+                    signal_meter(ui, link.rssi);
+                    ui.label(
+                        RichText::new(rssi_label(link.rssi))
+                            .color(rssi_color(link.rssi))
+                            .monospace(),
+                    );
+                    if link.channel > 0 {
+                        ui.label(RichText::new(format!("ch {}", link.channel)).color(MUTED));
+                    }
+                    if let (Some(tx), Some(rx)) = (link.tx_mbps, link.rx_mbps) {
+                        ui.label(
+                            RichText::new(format!("{tx:.0}/{rx:.0} Mbps"))
+                                .monospace()
+                                .color(MUTED),
+                        );
+                    }
+                    if let Some(secs) = link.connected_secs {
+                        ui.label(RichText::new(format!("· {}", uptime(secs))).color(MUTED));
+                    }
+                    if ui.small_button("Ver contraseña").clicked() {
+                        reveal_request = Some(link.ssid.clone());
+                    }
+                }
+                None => {
+                    ui.label(RichText::new("Sin conexión WiFi").color(MUTED));
+                }
+            }
+        });
+
+        if let Some(ssid) = reveal_request {
+            self.start_reveal(ssid);
+        }
+
+        if let Some(notice) = &self.notice {
+            ui.label(RichText::new(notice).color(GREEN));
+        }
 
         for e in &self.snap.errors {
             ui.label(RichText::new(format!("⚠ {e}")).color(RED));
@@ -201,7 +415,7 @@ impl App {
             .column(Column::initial(110.0).at_least(70.0))
             .column(Column::remainder().at_least(120.0).clip(true))
             .header(22.0, |mut header| {
-                for title in ["SSID", "BSSID", "Señal", "Canal", "PHY", "Histórico", "Fabricante"]
+                for title in ["SSID", "BSSID", "Señal", "Canal", "Cifrado", "Histórico", "Fabricante"]
                 {
                     header.col(|ui| {
                         ui.strong(title);
@@ -238,7 +452,17 @@ impl App {
                         ui.label(ap.channel.to_string());
                     });
                     row.col(|ui| {
-                        ui.label(&ap.phy);
+                        let text = if ap.encryption.is_empty() {
+                            "—"
+                        } else {
+                            ap.encryption.as_str()
+                        };
+                        let rt = RichText::new(text);
+                        if ap.is_open() {
+                            ui.label(rt.color(RED).strong());
+                        } else {
+                            ui.label(rt);
+                        }
                     });
                     row.col(|ui| match series.get(&ap.bssid) {
                         Some(samples) if samples.len() >= 2 => sparkline(ui, samples),
@@ -400,7 +624,7 @@ impl App {
         }
     }
 
-    fn ap_detail(&self, ui: &mut egui::Ui, bssid: &str) {
+    fn ap_detail(&mut self, ui: &mut egui::Ui, bssid: &str) {
         let ap = self.snap.aps.iter().find(|ap| ap.bssid == bssid);
 
         egui::Grid::new("detalle_ap")
@@ -441,6 +665,14 @@ impl App {
                 ui.label(ap.channel.to_string());
                 ui.end_row();
 
+                ui.label(RichText::new("Cifrado").color(MUTED));
+                if ap.is_open() {
+                    ui.label(RichText::new("abierta — sin cifrado").color(RED).strong());
+                } else {
+                    ui.label(&ap.encryption);
+                }
+                ui.end_row();
+
                 ui.label(RichText::new("PHY").color(MUTED));
                 ui.label(&ap.phy);
                 ui.end_row();
@@ -453,6 +685,20 @@ impl App {
                 });
                 ui.end_row();
             });
+
+        if let Some(ap) = ap {
+            ui.add_space(10.0);
+            if ui.button("Conectar a esta red…").clicked() {
+                self.dialog = Some(ConnectDialog {
+                    ssid: ap.ssid.clone(),
+                    password: String::new(),
+                    show_password: false,
+                    open: ap.is_open(),
+                    busy: false,
+                    error: None,
+                });
+            }
+        }
 
         ui.add_space(12.0);
         ui.label(RichText::new("Histórico de señal").strong());
@@ -514,6 +760,26 @@ impl eframe::App for App {
             self.scanning = false;
         }
 
+        while let Ok(op) = self.ops_rx.try_recv() {
+            match op {
+                OpResult::Connected(Ok(ssid)) => {
+                    self.dialog = None;
+                    self.notice = Some(format!("Conectado a {ssid}"));
+                    self.scanning = true;
+                    let _ = self.cmd_tx.send(()); // refrescar el snapshot
+                }
+                OpResult::Connected(Err(e)) => {
+                    if let Some(d) = &mut self.dialog {
+                        d.busy = false;
+                        d.error = Some(e);
+                    }
+                }
+                OpResult::Revealed { ssid, result } => {
+                    self.revealed = Some(Revealed { ssid, result });
+                }
+            }
+        }
+
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.selected = None;
         }
@@ -537,6 +803,8 @@ impl eframe::App for App {
             .show(ui, |ui| self.wifi_panel(ui));
 
         egui::CentralPanel::default().show(ui, |ui| self.lan_panel(ui));
+
+        self.windows(ui.ctx());
     }
 }
 
@@ -648,6 +916,18 @@ fn sparkline(ui: &mut egui::Ui, samples: &Series) {
         points,
         egui::Stroke::new(1.0, rssi_color(latest)),
     ));
+}
+
+/// Segundos conectado -> "2h 14m" / "3m 20s" / "45s".
+fn uptime(secs: u32) -> String {
+    let (h, m, s) = (secs / 3600, (secs % 3600) / 60, secs % 60);
+    if h > 0 {
+        format!("{h}h {m:02}m")
+    } else if m > 0 {
+        format!("{m}m {s:02}s")
+    } else {
+        format!("{s}s")
+    }
 }
 
 /// "—" para cadenas vacías.

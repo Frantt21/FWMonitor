@@ -9,9 +9,9 @@ Interfaz: Killer(R) Wi-Fi 6 AX1650x 160MHz Wireless Network Adapter (200NGW)
 Red local: Wi-Fi 192.168.100.95 /24 GW 192.168.100.1
 
 === WiFi (3 BSSIDs) ===
-SSID                  BSSID               RSSI    CH  PHY           Fabricante
-MiRed                 a0:08:6f:9e:8f:68  -41 dBm    7  HT (11n)      AVM (FRITZ!Box)
-RedVecina             a0:08:6f:de:14:5d  -84 dBm    1  HT (11n)      AVM (FRITZ!Box)
+SSID                  BSSID               RSSI    CH  Cifrado          PHY           Fabricante
+MiRed                 a0:08:6f:9e:8f:68  -41 dBm    7  WPA/WPA2         HT (11n)      AVM (FRITZ!Box)
+RedVecina             a0:08:6f:de:14:5d  -84 dBm    1  WPA2             HT (11n)      AVM (FRITZ!Box)
 
 === LAN: 2 activos, 1 ausentes ===
 IP               MAC                 Tipo     Fabricante              Estado
@@ -70,6 +70,22 @@ Misma captura que la TUI, en una ventana: el escaneo corre en un hilo aparte
 (así el sondeo ARP no congela la interfaz), la tabla de APs sale ordenada por
 señal y la de LAN mantiene el estado `nuevo`/`ausente` del historial.
 
+### Cifrado, enlace actual y conexión
+
+- Cada AP muestra su **cifrado** deducido de sus Information Elements (RSN,
+  WPA y OWE). En la GUI y en `--once`; las redes abiertas salen en rojo con el
+  aviso «sin cifrado».
+- Con una red asociada, la cabecera de la GUI muestra el **enlace actual**:
+  SSID, BSSID, señal, canal, Mbps de TX/RX y tiempo conectado.
+- **Conectar** desde el detalle de un AP: en Linux crea la conexión con
+  NetworkManager por D-Bus (la contraseña no pasa por `argv`, así que no se ve
+  en `ps`); en Windows crea un perfil de usuario con `WlanSetProfile` +
+  `WlanConnect`.
+- **Ver contraseña** de la red conectada: en Linux `nmcli --show-secrets` (NM
+  puede pedir autorización polkit); en Windows `WlanGetProfile` con
+  `WLAN_PROFILE_GET_PLAINTEXT_KEY`, que exige administrador. La clave no se
+  escribe en disco ni en el CSV: solo se muestra o se copia al portapapeles.
+
 El histórico de señal se muestrea en cada escaneo desde que abres la ventana
 (240 muestras por BSSID, ~20 min a 5 s). La columna **Histórico** de la tabla
 WiFi dibuja la tendencia de cada red; al hacer clic en una fila se abre el
@@ -114,6 +130,12 @@ troubleshooting): **[docs/LINUX.md](docs/LINUX.md)**
 - El modo monitor en Linux requiere root/CAP_NET_ADMIN y la interfaz queda
   desconectada mientras dura la captura (limitación de iwlwifi, no de la app).
   Los canales DFS (5 GHz 52-144) se saltan si el kernel los rechaza.
+- nl80211 solo entrega los IEs del BSS, no el campo Capability del beacon: en
+  Linux una red WEP sin IE de seguridad se muestra como «abierta» (Windows sí
+  distingue WEP porque tiene ese campo).
+- Conectar a una red reemplaza la asociación actual; en la GUI se bloquea el
+  escaneo mientras dura el intento. No probado de extremo a extremo en este
+  entorno para no cortar la conexión en uso.
 - La detección de "dispositivos conectados a TU red" se infiere por ARP: un
   dispositivo con firewall L2 agresivo podría no aparecer en el sondeo activo
   (seguiría apareciendo si habla con tu máquina).
@@ -126,4 +148,6 @@ troubleshooting): **[docs/LINUX.md](docs/LINUX.md)**
 - [x] Export a CSV con timestamp (`--csv`, `--csv-append`)
 - [x] Historial de clientes: nuevo/ausente entre snapshots en la TUI (TTL 5 min)
 - [x] Monitor mode en Linux (`--monitor`): captura pasiva 802.11 + channel hopping
+- [x] Cifrado por AP, estado del enlace actual y conexión con contraseña desde la GUI
 - [ ] Resolución de nombres (mDNS/NBNS/SSDP)
+- [ ] Módulo del router (FRITZ!Box TR-064: WAN, hosts, WiFi invitados)

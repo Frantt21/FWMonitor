@@ -16,7 +16,9 @@ use neli::socket::NlSocketHandle;
 use neli::types::GenlBuffer;
 use neli_wifi::{Nl80211Attr, Nl80211Cmd, NL_80211_GENL_VERSION};
 
-use crate::model::WifiAp;
+use crate::model::{LinkInfo, WifiAp};
+
+use super::{parse_ies, security_from_ies};
 
 /// Convierte el `AttrIfname` de nl80211 a un String utilizable.
 ///
@@ -32,36 +34,6 @@ fn mac_to_string(mac: &[u8]) -> String {
         .map(|b| format!("{b:02x}"))
         .collect::<Vec<_>>()
         .join(":")
-}
-
-/// Extrae el SSID (IE id 0) y la "Supported Rates"/HT info aproximada de los IEs.
-/// El PHY real lo deducimos de las capacidades anunciadas: es lo mismo que hace
-/// `iw` al mostrar "capability". Nos basta con distinguir b/g/n/ac/ax.
-/// (Pública dentro del crate: también la usa `monitor` para parsear beacons.)
-pub(crate) fn parse_ies(ies: &[u8]) -> (Option<String>, Option<&'static str>) {
-    let mut ssid = None;
-    let mut phy = None;
-    let mut i = 0usize;
-    while i + 1 < ies.len() {
-        let id = ies[i];
-        let len = ies[i + 1] as usize;
-        if i + 2 + len > ies.len() {
-            break;
-        }
-        let body = &ies[i + 2..i + 2 + len];
-        match id {
-            0 => ssid = Some(String::from_utf8_lossy(body).to_string()),
-            // IE 45 = HT capabilities (802.11n)
-            45 => phy = phy.or(Some("HT (11n)")),
-            // IE 191 = VHT capabilities (802.11ac)
-            191 => phy = phy.or(Some("VHT (11ac)")),
-            // IE 255 = extension: body[0]==35 es HE capabilities (802.11ax)
-            255 if !body.is_empty() && body[0] == 35 => phy = Some("HE (WiFi 6)"),
-            _ => {}
-        }
-        i += 2 + len;
-    }
-    (ssid, phy)
 }
 
 /// Frecuencia en MHz -> número de canal (2.4 y 5 GHz).
@@ -204,6 +176,13 @@ pub fn scan_aps() -> anyhow::Result<(String, Vec<WifiAp>)> {
                 _ => "VHT (11ac)".to_string(),
             });
 
+        // nl80211 solo entrega los IEs, no el campo Capability del beacon: sin
+        // IE de seguridad no podemos distinguir WEP de red abierta.
+        let encryption = security_from_ies(
+            bss.information_elements.as_deref().unwrap_or(&[]),
+            false,
+        );
+
         aps.push(WifiAp {
             ssid,
             bssid,
@@ -211,6 +190,7 @@ pub fn scan_aps() -> anyhow::Result<(String, Vec<WifiAp>)> {
             phy,
             channel: freq_to_channel(frequency),
             vendor: String::new(), // se resuelve en model::snapshot()
+            encryption: encryption.to_string(),
         });
     }
 
@@ -219,4 +199,61 @@ pub fn scan_aps() -> anyhow::Result<(String, Vec<WifiAp>)> {
     aps.dedup_by(|a, b| a.bssid == b.bssid);
 
     Ok((iface_name, aps))
+}
+
+/// Estado del enlace de la interfaz conectada (None si no hay asociación).
+pub fn link_info() -> anyhow::Result<Option<LinkInfo>> {
+    let mut sock = neli_wifi::Socket::connect()
+        .map_err(|e| anyhow::anyhow!("No se pudo abrir el socket nl80211: {e}"))?;
+    let ifaces = sock
+        .get_interfaces_info()
+        .map_err(|e| anyhow::anyhow!("get_interfaces_info: {e}"))?;
+
+    let Some(iface) = ifaces.iter().find(|i| i.index.is_some() && i.name.is_some()) else {
+        return Ok(None);
+    };
+
+    let ssid = iface
+        .ssid
+        .as_deref()
+        .map(ifname_to_string)
+        .unwrap_or_default();
+    if ssid.is_empty() {
+        return Ok(None); // interfaz sin asociar
+    }
+
+    let ifindex = iface.index.unwrap_or_default();
+    // En modo managed la única "estación" del dump es el AP al que estamos unidos.
+    let sta = sock
+        .get_station_info(ifindex)
+        .unwrap_or_default()
+        .into_iter()
+        .next();
+
+    let (bssid, rssi, tx_mbps, rx_mbps, connected_secs, tx_retries) = match sta {
+        Some(sta) => (
+            sta.bssid.as_deref().map(mac_to_string).unwrap_or_default(),
+            sta.average_signal
+                .or(sta.signal)
+                .map(i32::from)
+                .unwrap_or(0),
+            // nl80211 expone los bitrates en unidades de 100 kbps
+            sta.tx_bitrate.map(|r| r as f64 / 10.0),
+            sta.rx_bitrate.map(|r| r as f64 / 10.0),
+            sta.connected_time,
+            sta.tx_retries,
+        ),
+        None => (String::new(), 0, None, None, None, None),
+    };
+
+    Ok(Some(LinkInfo {
+        ssid,
+        bssid,
+        rssi,
+        channel: freq_to_channel(iface.frequency.unwrap_or(0)),
+        tx_mbps,
+        rx_mbps,
+        connected_secs,
+        tx_retries,
+    }))
 }
